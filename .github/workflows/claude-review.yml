@@ -1,0 +1,57 @@
+name: Claude Code Review
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+
+# 同一 PR に連続 push した場合は、古い実行をキャンセルする
+concurrency:
+  group: claude-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  claude-review:
+    name: Review PR diff with Claude
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read          # リポジトリの読み取り
+      pull-requests: write    # PR へのコメント投稿
+      issues: write           # レビューコメントのスレッド操作
+      id-token: write         # Action の OIDC 認証
+      actions: read           # CI 結果の参照
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0      # base との差分を取得するため全履歴を取る
+
+      - name: Run Claude Code review
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          # PR 上に進捗トラッキング用コメントを作成し、実行状況を反映する
+          track_progress: true
+          prompt: |
+            REPO: ${{ github.repository }}
+            PR NUMBER: ${{ github.event.pull_request.number }}
+
+            この Pull Request の差分をレビューしてください。日本語で回答してください。
+
+            手順:
+            1. `gh pr diff ${{ github.event.pull_request.number }}` で差分を取得する
+            2. 必要に応じて関連ファイルを読み、変更の意図と影響範囲を把握する
+            3. 指摘は該当行へのインラインコメントとして投稿し、最後に総評をまとめる
+
+            レビュー観点:
+            - バグ・ロジック誤り・境界値の考慮漏れ
+            - エラーハンドリングの妥当性
+            - テストの不足（追加・修正すべきケース）
+            - 可読性・命名・重複コードの整理余地
+            - セキュリティ上の懸念（入力検証、機密情報の混入など）
+
+            指摘の方針:
+            - 差分に含まれる変更のみを対象とし、無関係な既存コードの改修提案はしない
+            - 単なる好みの問題は指摘せず、根拠のある指摘に絞る
+            - 問題がなければ「指摘なし」と明記する
+          claude_args: |
+            --allowed-tools "Read,Grep,Glob,Bash(git diff:*),Bash(git log:*),Bash(gh pr view:*),Bash(gh pr diff:*),mcp__github_inline_comment__create_inline_comment"
